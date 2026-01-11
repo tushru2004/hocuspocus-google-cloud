@@ -1,4 +1,4 @@
-.PHONY: help start stop status pods logs cost
+.PHONY: help startgcvpn stopgcvpn status pods logs cost
 
 # GKE Configuration
 PROJECT := hocuspocus-vpn
@@ -11,8 +11,8 @@ help:
 	@echo "Hocuspocus VPN - Google Kubernetes Engine"
 	@echo ""
 	@echo "Daily Usage:"
-	@echo "  make start         - Start VPN (scale up nodes + deploy services)"
-	@echo "  make stop          - Stop VPN (delete LB + scale down nodes)"
+	@echo "  make startgcvpn    - Start VPN (scale up nodes + deploy services)"
+	@echo "  make stopgcvpn     - Stop VPN (delete LB + scale down nodes)"
 	@echo "  make status        - Check current status and running costs"
 	@echo ""
 	@echo "Monitoring:"
@@ -36,7 +36,7 @@ help:
 # Daily Start/Stop (RECOMMENDED)
 # ============================================================================
 
-start:
+startgcvpn:
 	@echo "Starting VPN infrastructure..."
 	@echo ""
 	@echo "Step 1/3: Scaling up node pool..."
@@ -63,7 +63,7 @@ start:
 	@echo "VPN is starting! It may take 1-2 minutes for the Load Balancer IP."
 	@echo "Run 'make vpn-ip' to check the IP."
 
-stop:
+stopgcvpn:
 	@echo "Stopping VPN infrastructure..."
 	@echo ""
 	@echo "Step 1/2: Deleting Load Balancer service (saves ~$$0.60/day)..."
@@ -78,7 +78,7 @@ stop:
 		--quiet
 	@echo ""
 	@echo "VPN stopped. Idle cost: ~$$0.05/day (disk storage only)"
-	@echo "Run 'make start' to restart."
+	@echo "Run 'make startgcvpn' to restart."
 
 status:
 	@echo "=== GKE Cluster Status ==="
