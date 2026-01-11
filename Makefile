@@ -1,92 +1,203 @@
-.PHONY: help init plan apply destroy kubeconfig argocd-password logs vpn-ip clean
+.PHONY: help start stop status pods logs cost
 
-# Default region
-REGION ?= eu-frankfurt-1
+# GKE Configuration
+PROJECT := hocuspocus-vpn
+ZONE := europe-west1-b
+CLUSTER := hocuspocus-vpn
+NODE_POOL := vpn-pool
+NAMESPACE := hocuspocus
 
 help:
-	@echo "Hocuspocus VPN - Oracle Kubernetes Engine"
+	@echo "Hocuspocus VPN - Google Kubernetes Engine"
 	@echo ""
-	@echo "Infrastructure:"
-	@echo "  make init          - Initialize Terraform"
-	@echo "  make plan          - Preview infrastructure changes"
-	@echo "  make apply         - Deploy OKE cluster and ArgoCD"
-	@echo "  make destroy       - Tear down all infrastructure"
+	@echo "Daily Usage:"
+	@echo "  make start         - Start VPN (scale up nodes + deploy services)"
+	@echo "  make stop          - Stop VPN (delete LB + scale down nodes)"
+	@echo "  make status        - Check current status and running costs"
 	@echo ""
-	@echo "Kubernetes:"
-	@echo "  make kubeconfig    - Configure kubectl for the cluster"
+	@echo "Monitoring:"
 	@echo "  make pods          - Show all pods"
 	@echo "  make logs          - Show mitmproxy logs"
 	@echo "  make logs-vpn      - Show VPN server logs"
-	@echo ""
-	@echo "ArgoCD:"
-	@echo "  make argocd-password - Get ArgoCD admin password"
-	@echo "  make argocd-url      - Get ArgoCD URL"
 	@echo ""
 	@echo "VPN:"
 	@echo "  make vpn-ip        - Get VPN LoadBalancer IP"
 	@echo "  make vpn-status    - Check VPN connection status"
 	@echo ""
-	@echo "Development:"
-	@echo "  make build-local   - Build Docker images locally"
-	@echo "  make push-local    - Push images to OCIR (local build)"
+	@echo "Infrastructure:"
+	@echo "  make init          - Initialize Terraform"
+	@echo "  make apply         - Deploy full GKE cluster"
+	@echo "  make destroy       - Tear down everything (careful!)"
 	@echo ""
 	@echo "Cost:"
-	@echo "  make cost          - Show estimated monthly cost"
+	@echo "  make cost          - Show cost breakdown"
 
 # ============================================================================
-# Infrastructure
+# Daily Start/Stop (RECOMMENDED)
 # ============================================================================
 
-init:
-	cd terraform/oke && terraform init
+start:
+	@echo "Starting VPN infrastructure..."
+	@echo ""
+	@echo "Step 1/3: Scaling up node pool..."
+	gcloud container clusters resize $(CLUSTER) \
+		--node-pool $(NODE_POOL) \
+		--num-nodes 1 \
+		--zone $(ZONE) \
+		--project $(PROJECT) \
+		--quiet
+	@echo ""
+	@echo "Step 2/3: Waiting for node to be ready..."
+	@sleep 10
+	kubectl wait --for=condition=Ready nodes --all --timeout=120s
+	@echo ""
+	@echo "Step 3/3: Deploying services..."
+	kubectl apply -k k8s/
+	@echo ""
+	@echo "Waiting for pods to start..."
+	@sleep 15
+	kubectl get pods -n $(NAMESPACE)
+	@echo ""
+	@echo "VPN IP: $$(kubectl get svc vpn-service -n $(NAMESPACE) -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo 'pending...')"
+	@echo ""
+	@echo "VPN is starting! It may take 1-2 minutes for the Load Balancer IP."
+	@echo "Run 'make vpn-ip' to check the IP."
 
-plan:
-	cd terraform/oke && terraform plan
+stop:
+	@echo "Stopping VPN infrastructure..."
+	@echo ""
+	@echo "Step 1/2: Deleting Load Balancer service (saves ~$$0.60/day)..."
+	-kubectl delete svc vpn-service -n $(NAMESPACE) 2>/dev/null || true
+	@echo ""
+	@echo "Step 2/2: Scaling down node pool (saves ~$$0.14/day)..."
+	gcloud container clusters resize $(CLUSTER) \
+		--node-pool $(NODE_POOL) \
+		--num-nodes 0 \
+		--zone $(ZONE) \
+		--project $(PROJECT) \
+		--quiet
+	@echo ""
+	@echo "VPN stopped. Idle cost: ~$$0.05/day (disk storage only)"
+	@echo "Run 'make start' to restart."
 
-apply:
-	cd terraform/oke && terraform apply
-
-destroy:
-	cd terraform/oke && terraform destroy
+status:
+	@echo "=== GKE Cluster Status ==="
+	@echo ""
+	@echo "Node Pool:"
+	@gcloud container node-pools describe $(NODE_POOL) \
+		--cluster $(CLUSTER) \
+		--zone $(ZONE) \
+		--project $(PROJECT) \
+		--format="table(name,config.machineType,initialNodeCount,autoscaling.enabled)" 2>/dev/null || echo "  Unable to fetch"
+	@echo ""
+	@echo "Current Nodes:"
+	@kubectl get nodes 2>/dev/null || echo "  No nodes running (scaled to 0)"
+	@echo ""
+	@echo "Pods:"
+	@kubectl get pods -n $(NAMESPACE) 2>/dev/null || echo "  No pods running"
+	@echo ""
+	@echo "Services:"
+	@kubectl get svc -n $(NAMESPACE) 2>/dev/null || echo "  No services"
+	@echo ""
+	@echo "=== Current Hourly Cost ==="
+	@if kubectl get nodes 2>/dev/null | grep -q Ready; then \
+		echo "  Node (e2-small spot): ~$$0.006/hr"; \
+		if kubectl get svc vpn-service -n $(NAMESPACE) 2>/dev/null | grep -q LoadBalancer; then \
+			echo "  Load Balancer:        ~$$0.025/hr"; \
+			echo "  --------------------------------"; \
+			echo "  TOTAL:                ~$$0.031/hr (~$$0.74/day)"; \
+		else \
+			echo "  Load Balancer:        $$0 (not running)"; \
+			echo "  --------------------------------"; \
+			echo "  TOTAL:                ~$$0.006/hr (~$$0.14/day)"; \
+		fi \
+	else \
+		echo "  Nodes: $$0 (scaled to 0)"; \
+		echo "  Load Balancer: $$0 (not running)"; \
+		echo "  Disk storage: ~$$0.002/hr"; \
+		echo "  --------------------------------"; \
+		echo "  TOTAL: ~$$0.05/day (idle)"; \
+	fi
 
 # ============================================================================
-# Kubernetes
+# Monitoring
 # ============================================================================
-
-kubeconfig:
-	@cd terraform/oke && terraform output -raw kubeconfig_command | sh
 
 pods:
-	kubectl get pods -n hocuspocus -o wide
+	kubectl get pods -n $(NAMESPACE) -o wide
 
 logs:
-	kubectl logs -n hocuspocus -l app=mitmproxy -f
+	kubectl logs -n $(NAMESPACE) -l app=mitmproxy -f
 
 logs-vpn:
-	kubectl logs -n hocuspocus -l app=vpn-server -f
-
-# ============================================================================
-# ArgoCD
-# ============================================================================
-
-argocd-password:
-	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d && echo
-
-argocd-url:
-	@echo "ArgoCD URL: http://$$(kubectl get svc argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
-
-argocd-sync:
-	kubectl -n argocd patch application hocuspocus-vpn --type merge -p '{"operation": {"initiatedBy": {"username": "admin"}, "sync": {"syncStrategy": {"apply": {"force": true}}}}}'
+	kubectl logs -n $(NAMESPACE) -l app.kubernetes.io/name=hocuspocus-vpn,app=vpn-server -c strongswan -f
 
 # ============================================================================
 # VPN
 # ============================================================================
 
 vpn-ip:
-	@echo "VPN IP: $$(kubectl get svc vpn-service -n hocuspocus -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+	@echo "VPN IP: $$(kubectl get svc vpn-service -n $(NAMESPACE) -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo 'Not available - run make start')"
 
 vpn-status:
-	kubectl exec -n hocuspocus -it $$(kubectl get pods -n hocuspocus -l app=vpn-server -o jsonpath='{.items[0].metadata.name}') -- ipsec statusall
+	kubectl exec -n $(NAMESPACE) -it $$(kubectl get pods -n $(NAMESPACE) -l app=vpn-server -o jsonpath='{.items[0].metadata.name}') -c strongswan -- ipsec statusall
+
+vpn-creds:
+	@echo ""
+	@echo "=== VPN Connection Details ==="
+	@echo "Server:   $$(kubectl get svc vpn-service -n $(NAMESPACE) -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo 'Not available')"
+	@echo "Type:     IKEv2"
+	@echo "Username: $$(kubectl get secret vpn-secrets -n $(NAMESPACE) -o jsonpath='{.data.VPN_USERNAME}' | base64 -d)"
+	@echo "Password: $$(kubectl get secret vpn-secrets -n $(NAMESPACE) -o jsonpath='{.data.VPN_PASSWORD}' | base64 -d)"
+	@echo ""
+
+# ============================================================================
+# Infrastructure (Terraform)
+# ============================================================================
+
+init:
+	cd terraform/gke && terraform init
+
+plan:
+	cd terraform/gke && terraform plan
+
+apply:
+	cd terraform/gke && terraform apply
+
+destroy:
+	@echo "WARNING: This will delete the entire GKE cluster!"
+	@read -p "Are you sure? (yes/no): " confirm && [ "$$confirm" = "yes" ] || exit 1
+	cd terraform/gke && terraform destroy
+
+kubeconfig:
+	gcloud container clusters get-credentials $(CLUSTER) --zone $(ZONE) --project $(PROJECT)
+
+# ============================================================================
+# Cost Information
+# ============================================================================
+
+cost:
+	@echo ""
+	@echo "=== GKE VPN Cost Breakdown ==="
+	@echo ""
+	@echo "Running (5 hrs/day, 30 days):"
+	@echo "  Node (e2-small spot):     ~$$0.90/month  ($$0.006/hr × 5hr × 30)"
+	@echo "  Load Balancer:            ~$$3.75/month  ($$0.025/hr × 5hr × 30)"
+	@echo "  Disk Storage (12GB):      ~$$0.50/month"
+	@echo "  GKE Control Plane:        $$0 (free for 1 zonal cluster)"
+	@echo "  Static IP (in use):       $$0"
+	@echo "  ----------------------------------------"
+	@echo "  TOTAL (5hr/day):          ~$$5-6/month"
+	@echo ""
+	@echo "If running 24/7:"
+	@echo "  Node:                     ~$$4.50/month"
+	@echo "  Load Balancer:            ~$$18.00/month"
+	@echo "  ----------------------------------------"
+	@echo "  TOTAL (24/7):             ~$$23/month"
+	@echo ""
+	@echo "Idle (stopped with 'make stop'):"
+	@echo "  Disk storage only:        ~$$1.50/month"
+	@echo ""
 
 # ============================================================================
 # Development
@@ -96,61 +207,11 @@ build-local:
 	docker build -t hocuspocus-vpn/mitmproxy:latest -f docker/mitmproxy/Dockerfile .
 	docker build -t hocuspocus-vpn/vpn:latest -f docker/vpn/Dockerfile docker/vpn/
 
-push-local:
-	@echo "Getting OCIR namespace..."
-	$(eval NAMESPACE := $(shell oci os ns get --query 'data' --raw-output))
-	docker tag hocuspocus-vpn/mitmproxy:latest $(REGION).ocir.io/$(NAMESPACE)/hocuspocus-vpn/mitmproxy:latest
-	docker tag hocuspocus-vpn/vpn:latest $(REGION).ocir.io/$(NAMESPACE)/hocuspocus-vpn/vpn:latest
-	docker push $(REGION).ocir.io/$(NAMESPACE)/hocuspocus-vpn/mitmproxy:latest
-	docker push $(REGION).ocir.io/$(NAMESPACE)/hocuspocus-vpn/vpn:latest
+deploy:
+	kubectl apply -k k8s/
 
-# ============================================================================
-# Secrets
-# ============================================================================
+restart-vpn:
+	kubectl rollout restart daemonset vpn-server -n $(NAMESPACE)
 
-create-secrets:
-	@echo "Creating secrets from secrets.yaml..."
-	@if [ -f k8s/secrets.yaml ]; then \
-		kubectl apply -f k8s/secrets.yaml; \
-	else \
-		echo "ERROR: k8s/secrets.yaml not found. Copy from secrets.yaml.example and fill in values."; \
-		exit 1; \
-	fi
-
-create-ocir-secret:
-	@echo "Creating OCIR pull secret..."
-	@read -p "OCI Auth Token: " TOKEN; \
-	read -p "OCI Username (e.g., oracleidentitycloudservice/user@email.com): " USERNAME; \
-	NAMESPACE=$$(oci os ns get --query 'data' --raw-output); \
-	kubectl create secret docker-registry ocir-secret \
-		--namespace=hocuspocus \
-		--docker-server=$(REGION).ocir.io \
-		--docker-username="$$NAMESPACE/$$USERNAME" \
-		--docker-password="$$TOKEN"
-
-# ============================================================================
-# Cost
-# ============================================================================
-
-cost:
-	@echo ""
-	@echo "Estimated Monthly Cost (~$$29/month):"
-	@echo "  - OKE Control Plane (basic): $$0 (FREE)"
-	@echo "  - Worker Node (2 OCPU, 4GB):  ~$$18.00"
-	@echo "  - Network Load Balancer:      ~$$9.80"
-	@echo "  - Block Storage (50GB):       ~$$1.28"
-	@echo "  - OCIR:                       $$0 (included)"
-	@echo "  - Egress (10TB free):         $$0"
-	@echo ""
-	@echo "Compare to AWS EKS: ~$$132/month"
-	@echo "Compare to GKE:     ~$$54/month"
-	@echo ""
-
-# ============================================================================
-# Cleanup
-# ============================================================================
-
-clean:
-	rm -rf terraform/oke/.terraform
-	rm -f terraform/oke/.terraform.lock.hcl
-	rm -f terraform/oke/terraform.tfstate*
+restart-mitmproxy:
+	kubectl rollout restart deployment mitmproxy -n $(NAMESPACE)
