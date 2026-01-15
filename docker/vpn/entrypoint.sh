@@ -33,7 +33,7 @@ if [ ! -f /etc/ipsec.d/private/server-key.pem ]; then
     # Generate CA certificate
     ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/ca-key.pem
     ipsec pki --self --ca --lifetime 3650 --in /etc/ipsec.d/private/ca-key.pem \
-        --type rsa --dn "CN=VPN CA" --outform pem > /etc/ipsec.d/cacerts/ca-cert.pem
+        --type rsa --dn "CN=Hocuspocus VPN CA" --outform pem > /etc/ipsec.d/cacerts/ca-cert.pem
 
     # Generate server certificate
     ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/server-key.pem
@@ -42,15 +42,50 @@ if [ ! -f /etc/ipsec.d/private/server-key.pem ]; then
         --cakey /etc/ipsec.d/private/ca-key.pem --dn "CN=$SERVER_IP" --san="$SERVER_IP" \
         --flag serverAuth --flag ikeIntermediate --outform pem > /etc/ipsec.d/certs/server-cert.pem
 
+    # Generate client certificate with clientAuth extension
+    echo "Generating client certificate..."
+    ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/client-key.pem
+    ipsec pki --pub --in /etc/ipsec.d/private/client-key.pem --type rsa | \
+        ipsec pki --issue --lifetime 1825 --cacert /etc/ipsec.d/cacerts/ca-cert.pem \
+        --cakey /etc/ipsec.d/private/ca-key.pem --dn "CN=vpnclient" \
+        --san "vpnclient" --flag clientAuth \
+        --outform pem > /etc/ipsec.d/certs/client-cert.pem
+
+    # Create PKCS12 bundle for client (for iPhone import)
+    openssl pkcs12 -export -inkey /etc/ipsec.d/private/client-key.pem \
+        -in /etc/ipsec.d/certs/client-cert.pem \
+        -certfile /etc/ipsec.d/cacerts/ca-cert.pem \
+        -name "Hocuspocus VPN Client" \
+        -out /etc/ipsec.d/client.p12 \
+        -passout pass:hocuspocus
+
     echo "Certificates generated successfully"
 else
     echo "Using existing certificates from mounted volume"
+
+    # Generate client cert if it doesn't exist (upgrade from old setup)
+    if [ ! -f /etc/ipsec.d/private/client-key.pem ]; then
+        echo "Generating client certificate (upgrade)..."
+        ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/client-key.pem
+        ipsec pki --pub --in /etc/ipsec.d/private/client-key.pem --type rsa | \
+            ipsec pki --issue --lifetime 1825 --cacert /etc/ipsec.d/cacerts/ca-cert.pem \
+            --cakey /etc/ipsec.d/private/ca-key.pem --dn "CN=vpnclient" \
+            --san "vpnclient" --flag clientAuth \
+            --outform pem > /etc/ipsec.d/certs/client-cert.pem
+
+        openssl pkcs12 -export -inkey /etc/ipsec.d/private/client-key.pem \
+            -in /etc/ipsec.d/certs/client-cert.pem \
+            -certfile /etc/ipsec.d/cacerts/ca-cert.pem \
+            -name "Hocuspocus VPN Client" \
+            -out /etc/ipsec.d/client.p12 \
+            -passout pass:hocuspocus
+    fi
 fi
 
-# Configure IPsec
+# Configure IPsec with certificate-based authentication
 cat > /etc/ipsec.conf <<EOF
 config setup
-    charondebug="ike 1, knl 1, cfg 0"
+    charondebug="ike 4, knl 1, cfg 2, net 1, enc 1, lib 1"
     uniqueids=no
 
 conn ikev2-vpn
@@ -65,27 +100,23 @@ conn ikev2-vpn
     rekey=no
     left=%any
     leftid=$SERVER_IP
+    leftauth=pubkey
     leftcert=server-cert.pem
     leftsendcert=always
     leftsubnet=0.0.0.0/0
     right=%any
     rightid=%any
-    rightauth=eap-mschapv2
+    rightauth=pubkey
+    rightca="CN=Hocuspocus VPN CA"
     rightsourceip=10.10.10.0/24
     rightdns=8.8.8.8,8.8.4.4
-    rightsendcert=never
-    eap_identity=%identity
     ike=aes256-sha256-modp2048,aes256-sha1-modp2048,3des-sha1-modp2048!
     esp=aes256-sha256,aes256-sha1,3des-sha1!
 EOF
 
-# Configure VPN credentials from environment
-VPN_USER="${VPN_USERNAME:-vpnuser}"
-VPN_PASS="${VPN_PASSWORD:-changeme}"
-
+# Configure secrets for certificate auth
 cat > /etc/ipsec.secrets <<EOF
 : RSA "server-key.pem"
-$VPN_USER : EAP "$VPN_PASS"
 EOF
 
 chmod 600 /etc/ipsec.secrets

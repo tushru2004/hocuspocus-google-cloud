@@ -9,7 +9,7 @@ resources:
   - pvcs.yaml
   - postgres-statefulset.yaml
   - mitmproxy-deployment.yaml
-  - vpn-daemonset.yaml
+  - vpn-deployment.yaml
   - services.yaml
 
 # Common labels for all resources

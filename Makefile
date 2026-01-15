@@ -1,4 +1,4 @@
-.PHONY: help startgcvpn stopgcvpn status pods logs cost test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup test-e2e-install
+.PHONY: help startgcvpn stopgcvpn status pods logs cost test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup test-e2e-install vpn-profile vpn-profile-serve vpn-profile-install vpn-profile-mdm verify-vpn verify-vpn-appium
 
 # GKE Configuration
 PROJECT := hocuspocus-vpn
@@ -21,8 +21,13 @@ help:
 	@echo "  make logs-vpn      - Show VPN server logs"
 	@echo ""
 	@echo "VPN:"
-	@echo "  make vpn-ip        - Get VPN LoadBalancer IP"
-	@echo "  make vpn-status    - Check VPN connection status"
+	@echo "  make vpn-ip              - Get VPN LoadBalancer IP"
+	@echo "  make vpn-status          - Check VPN connection status"
+	@echo "  make vpn-profile         - Generate iPhone .mobileconfig profile"
+	@echo "  make vpn-profile-install - Push profile via Apple Configurator (requires tap)"
+	@echo "  make vpn-profile-mdm     - Push profile via SimpleMDM (fully automatic)"
+	@echo "  make verify-vpn          - Quick VPN verification (uses pymobiledevice3)"
+	@echo "  make verify-vpn-appium   - Full VPN verification (uses Appium, bypasses cache)"
 	@echo ""
 	@echo "E2E Testing:"
 	@echo "  make test-e2e         - Run all E2E tests"
@@ -54,7 +59,7 @@ startgcvpn:
 	@echo "Step 1/3: Scaling up node pool..."
 	gcloud container clusters resize $(CLUSTER) \
 		--node-pool $(NODE_POOL) \
-		--num-nodes 1 \
+		--num-nodes 2 \
 		--zone $(ZONE) \
 		--project $(PROJECT) \
 		--quiet
@@ -74,6 +79,10 @@ startgcvpn:
 	@echo ""
 	@echo "VPN is starting! It may take 1-2 minutes for the Load Balancer IP."
 	@echo "Run 'make vpn-ip' to check the IP."
+	@echo ""
+	@echo "Step 4/4: Verifying VPN connection..."
+	@sleep 20
+	@./scripts/verify-vpn.sh || echo "⚠️  Verification skipped or failed. Check manually."
 
 stopgcvpn:
 	@echo "Stopping VPN infrastructure..."
@@ -91,6 +100,14 @@ stopgcvpn:
 	@echo ""
 	@echo "VPN stopped. Idle cost: ~$$0.05/day (disk storage only)"
 	@echo "Run 'make startgcvpn' to restart."
+
+verify-vpn: ## Quick VPN verification (uses pymobiledevice3)
+	@./scripts/verify-vpn.sh
+
+verify-vpn-appium: ## Full VPN verification using Appium (bypasses browser cache, uses prod DB)
+	@echo "Starting Appium-based verification..."
+	@echo "NOTE: Requires Appium server running (appium)"
+	@source .venv/bin/activate && pytest tests/e2e_prod/test_verify_vpn.py -v -s --tb=short
 
 status:
 	@echo "=== GKE Cluster Status ==="
@@ -163,6 +180,22 @@ vpn-creds:
 	@echo "Password: $$(kubectl get secret vpn-secrets -n $(NAMESPACE) -o jsonpath='{.data.VPN_PASSWORD}' | base64 -d)"
 	@echo ""
 
+vpn-profile: ## Generate iPhone .mobileconfig profile for certificate-based VPN auth
+	@./scripts/generate-vpn-profile.sh
+
+vpn-profile-serve: vpn-profile ## Generate and serve VPN profile via HTTP for iPhone download
+	@echo "Serving VPN profile at http://$$(ipconfig getifaddr en0):8000/hocuspocus-vpn.mobileconfig"
+	@echo "Open this URL on your iPhone to install the profile"
+	@cd vpn-profiles && python3 -m http.server 8000
+
+vpn-profile-install: vpn-profile ## Generate and push VPN profile to connected iPhone (requires tap to install)
+	@echo "Pushing VPN profile to connected iPhone..."
+	@"/Applications/Apple Configurator.app/Contents/MacOS/cfgutil" --foreach install-profile vpn-profiles/hocuspocus-vpn.mobileconfig
+	@echo "Profile pushed! Tap 'Install' on the iPhone to complete installation."
+
+vpn-profile-mdm: ## Generate and push VPN profile via SimpleMDM (fully automatic, no tap required)
+	@./scripts/push-vpn-profile-mdm.sh
+
 # ============================================================================
 # Infrastructure (Terraform)
 # ============================================================================
@@ -225,6 +258,16 @@ build-local:
 build-push: ## Build and push mitmproxy image to Artifact Registry
 	docker build --platform $(PLATFORM) -t $(REGISTRY)/mitmproxy:latest -f docker/mitmproxy/Dockerfile .
 	docker push $(REGISTRY)/mitmproxy:latest
+
+build-push-vpn: ## Build and push VPN image to Artifact Registry
+	docker build --platform $(PLATFORM) -t $(REGISTRY)/vpn:latest -f docker/vpn/Dockerfile docker/vpn/
+	docker push $(REGISTRY)/vpn:latest
+
+deploy-vpn: build-push-vpn ## Build, push, and restart VPN server
+	kubectl rollout restart daemonset vpn-server -n $(NAMESPACE)
+	@echo "Waiting for VPN server to restart..."
+	@sleep 10
+	kubectl get pods -n $(NAMESPACE) -l app=vpn-server
 
 deploy:
 	kubectl apply -k k8s/

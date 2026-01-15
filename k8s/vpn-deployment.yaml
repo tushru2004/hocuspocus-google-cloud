@@ -1,18 +1,27 @@
 apiVersion: apps/v1
-kind: DaemonSet
+kind: Deployment
 metadata:
   name: vpn-server
   namespace: hocuspocus
   labels:
     app: vpn-server
+    app.kubernetes.io/managed-by: argocd
+    app.kubernetes.io/name: hocuspocus-vpn
 spec:
+  replicas: 1
   selector:
     matchLabels:
       app: vpn-server
+      app.kubernetes.io/managed-by: argocd
+      app.kubernetes.io/name: hocuspocus-vpn
+  strategy:
+    type: Recreate  # Required for RWO PVC - can't have 2 pods mounting same PVC
   template:
     metadata:
       labels:
         app: vpn-server
+        app.kubernetes.io/managed-by: argocd
+        app.kubernetes.io/name: hocuspocus-vpn
     spec:
       # Use host networking for VPN
       hostNetwork: true
@@ -62,7 +71,7 @@ spec:
 
       containers:
         - name: strongswan
-          image: REGISTRY/vpn:latest
+          image: europe-west1-docker.pkg.dev/hocuspocus-vpn/hocuspocus-vpn/vpn:latest
           imagePullPolicy: Always
 
           securityContext:
@@ -74,9 +83,7 @@ spec:
 
           env:
             - name: VPN_SERVER_IP
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.hostIP
+              value: "35.210.225.36"  # External LoadBalancer IP for certificate CN
             - name: VPN_USERNAME
               valueFrom:
                 secretKeyRef:
