@@ -557,3 +557,110 @@ When user is at Social Hub Vienna:
 ```bash
 make test-location-whitelist  # Must be physically at a blocked location
 ```
+
+## macOS VPN Setup
+
+For setting up VPN filtering on macOS devices, see [macos/DFU-MODE.md](macos/DFU-MODE.md) for DFU mode instructions and [macos/README.md](macos/README.md) for full setup guide.
+
+### Quick Reference
+```bash
+make macos-vpn-profile      # Generate macOS VPN profile
+make macos-vpn-profile-mdm  # Generate and push via SimpleMDM
+make macos-pf-killswitch    # Generate pf firewall rules
+make macos-pf-install       # Install pf kill switch (requires sudo)
+make macos-pf-uninstall     # Remove pf kill switch (requires sudo)
+```
+
+### Key Differences from iOS
+- macOS does NOT have native Always-On VPN
+- Use **pf firewall kill switch** to block non-VPN traffic
+- Supervision requires **DFU mode restore** via Apple Configurator (erases Mac)
+- See [macos/DFU-MODE.md](macos/DFU-MODE.md) for DFU instructions
+
+### macOS Pseudo-Supervision (Restricted User)
+
+macOS cannot be truly supervised without Apple Business Manager (ABM). As a workaround, create a **restricted standard user** for daily use:
+
+- **Admin account**: Keep password secret (only you know it)
+- **Standard "restricted" user**: For daily use - cannot unenroll MDM, remove profiles, or erase Mac
+
+```bash
+# Create restricted user via SimpleMDM script
+# Script: macos/scripts/create-restricted-user.sh
+# SimpleMDM script name: "Create Restricted User (Pseudo-Supervision)"
+```
+
+**What standard user CANNOT do:**
+- Unenroll from MDM (requires admin)
+- Remove profiles (requires admin)
+- Erase Mac (requires admin)
+- Run `sudo` commands
+- Install apps without admin password
+
+### SimpleMDM Device Identifiers
+
+| Device | SimpleMDM ID | Type |
+|--------|--------------|------|
+| iPhone XR | 2154382 | iOS (supervised) |
+| MacBook Air | 2162127 | macOS (User-Approved MDM) |
+
+## SimpleMDM Munki App Deployment
+
+Deploy macOS apps (like VS Code) that aren't in the App Store via Munki.
+
+### How It Works
+1. Upload .pkg to SimpleMDM as custom app
+2. Assign to a group with **Install Method: Munki**
+3. SimpleMDM auto-installs Munki client on device
+4. Munki installs the app
+
+### UI Navigation (2025 Interface)
+1. **Devices → Groups** → Click a group (or create new)
+2. Click **Apps** tab (right side panel)
+3. Search for app name
+4. Configure:
+   - **Install Method**: `Munki` (not MDM)
+   - **Install Type**: `Managed` (auto-install) or `Self Serve` (user chooses)
+5. Click **Review & Save**
+
+### Install Method Options (macOS only)
+| Method | Description |
+|--------|-------------|
+| **MDM** | Installs via MDM protocol |
+| **Munki** | Installs via SimpleMDM's Munki integration |
+
+### Install Type Options (Munki)
+| Type | Description |
+|------|-------------|
+| **Managed** | Auto-install, user can't uninstall |
+| **Self Serve** | User installs from Managed Software Center |
+| **Default Installs** | Optional, user can uninstall |
+| **Managed Updates** | Update existing apps via Munki |
+| **Managed Uninstalls** | Remove apps |
+
+### Creating .pkg from .app
+For apps distributed as .app (like VS Code):
+```bash
+# Convert .app to .pkg for SimpleMDM upload
+pkgbuild --component "/path/to/App.app" --install-location /Applications /tmp/app.pkg
+```
+
+### SimpleMDM Munki API
+```bash
+API_KEY="2IkV3x1TEpS9r6AGtmeyvLlBMvwHzCeJgQY4O8VyTtoss2KR6qVpEZcQqPlmLrLV"
+
+# Create Munki assignment group
+curl -s -X POST --user "$API_KEY:" \
+    --data "name=Munki Apps" \
+    --data "type=munki" \
+    "https://a.simplemdm.com/api/v1/assignment_groups"
+
+# Add device to group
+curl -s -X POST --user "$API_KEY:" \
+    "https://a.simplemdm.com/api/v1/assignment_groups/GROUP_ID/devices/DEVICE_ID"
+
+# Assign app to group
+curl -s -X POST --user "$API_KEY:" \
+    --data "install_type=managed" \
+    "https://a.simplemdm.com/api/v1/assignment_groups/GROUP_ID/apps/APP_ID"
+```

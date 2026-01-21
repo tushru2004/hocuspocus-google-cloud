@@ -1,4 +1,4 @@
-.PHONY: help startgcvpn stopgcvpn status pods logs cost test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup test-e2e-install test-location-whitelist vpn-profile vpn-profile-serve vpn-profile-install vpn-profile-mdm verify-vpn verify-vpn-appium-prod appium appium-stop appium-restart appium-logs
+.PHONY: help startgcvpn stopgcvpn status pods logs cost test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup test-e2e-install test-location-whitelist vpn-profile vpn-profile-serve vpn-profile-install vpn-profile-mdm verify-vpn verify-vpn-appium-prod verify-vpn-macos appium appium-stop appium-restart appium-logs macos-vpn-profile macos-vpn-profile-mdm macos-pf-killswitch macos-pf-install macos-pf-uninstall
 
 # GKE Configuration
 PROJECT := hocuspocus-vpn
@@ -53,6 +53,13 @@ help:
 	@echo ""
 	@echo "Cost:"
 	@echo "  make cost          - Show cost breakdown"
+	@echo ""
+	@echo "macOS VPN Setup:"
+	@echo "  make macos-vpn-profile     - Generate macOS VPN profile"
+	@echo "  make macos-vpn-profile-mdm - Push macOS VPN profile via SimpleMDM"
+	@echo "  make macos-pf-killswitch   - Generate pf firewall kill switch config"
+	@echo "  make macos-pf-install      - Install pf kill switch (requires sudo)"
+	@echo "  make macos-pf-uninstall    - Uninstall pf kill switch (requires sudo)"
 
 # ============================================================================
 # Daily Start/Stop (RECOMMENDED)
@@ -368,3 +375,24 @@ test-e2e-setup: ## Build and install WebDriverAgent (first-time setup)
 
 test-e2e-install: ## Install E2E test dependencies
 	$(PYTHON) -m pip install -r tests/e2e/requirements.txt
+
+# ============================================================================
+# macOS VPN Setup
+# ============================================================================
+
+macos-vpn-profile: ## Generate macOS VPN profile (.mobileconfig)
+	@./macos/scripts/generate-macos-vpn-profile.sh
+
+macos-vpn-profile-mdm: ## Push macOS VPN profile via SimpleMDM
+	@./macos/scripts/push-macos-vpn-profile-mdm.sh
+
+macos-pf-killswitch: ## Generate pf firewall kill switch configuration
+	@./macos/scripts/generate-pf-killswitch.sh
+
+macos-pf-install: ## Install pf kill switch (blocks internet without VPN)
+	@echo "Installing pf kill switch (requires sudo)..."
+	@sudo ./macos/scripts/install-pf-killswitch.sh
+
+macos-pf-uninstall: ## Uninstall pf kill switch (restores normal networking)
+	@echo "Uninstalling pf kill switch (requires sudo)..."
+	@sudo ./macos/scripts/uninstall-pf-killswitch.sh
