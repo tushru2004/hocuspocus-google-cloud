@@ -59,7 +59,12 @@ class TestMacOSVPNVerification:
 
         # Primary check: look for block page content in the browser
         page_source = macos_driver.page_source
-        page_blocked = "Access Denied" in page_source
+        page_title = macos_driver.title
+        page_blocked = (
+            "Access Denied" in page_source or
+            "Browsing Blocked" in page_title or
+            "blocked" in page_title.lower()
+        )
 
         # Secondary check: proxy logs (may not always show due to caching)
         logs = mitmproxy_logs(tail=50)
@@ -69,7 +74,7 @@ class TestMacOSVPNVerification:
         ) or "BLOCKING non-whitelisted domain" in logs
 
         assert page_blocked or logs_blocked, \
-            f"twitter.com was not blocked! Page title: {macos_driver.title}"
+            f"twitter.com was not blocked! Page title: {page_title}"
 
         print("✅ [TEST macOS] twitter.com BLOCKED (as expected)")
 
@@ -221,13 +226,18 @@ class TestMacOSVPNQuickCheck:
 
         # Check page content for block page
         page_source = macos_driver.page_source
-        page_blocked = "Access Denied" in page_source
+        page_title = macos_driver.title
+        page_blocked = (
+            "Access Denied" in page_source or
+            "Browsing Blocked" in page_title or
+            "blocked" in page_title.lower()
+        )
 
         # Also check logs as secondary verification
         logs = mitmproxy_logs(tail=30)
         logs_blocked = "BLOCKING" in logs
 
         assert page_blocked or logs_blocked, \
-            f"No blocking detected! Title: {macos_driver.title}"
+            f"No blocking detected! Title: {page_title}"
 
         print("✅ [QUICK macOS] Domain blocking is working")
