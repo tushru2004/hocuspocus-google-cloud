@@ -1,4 +1,4 @@
-.PHONY: help startgcvpn stopgcvpn status pods logs cost test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup test-e2e-install test-location-whitelist vpn-profile vpn-profile-serve vpn-profile-install vpn-profile-mdm verify-vpn verify-vpn-appium-prod verify-vpn-macos appium appium-stop appium-restart appium-logs macos-vpn-profile macos-vpn-profile-mdm macos-vpn-eap-profile macos-vpn-eap-profile-mdm macos-pf-killswitch macos-pf-install macos-pf-uninstall
+.PHONY: help startgcvpn stopgcvpn status pods logs cost test-e2e test-e2e-flows test-e2e-overlay test-e2e-smoke test-e2e-setup test-e2e-install test-location-whitelist vpn-profile vpn-profile-serve vpn-profile-install vpn-profile-mdm verify-vpn verify-vpn-appium-prod appium appium-stop appium-restart appium-logs
 
 # GKE Configuration
 PROJECT := hocuspocus-vpn
@@ -55,14 +55,7 @@ help:
 	@echo "Cost:"
 	@echo "  make cost          - Show cost breakdown"
 	@echo ""
-	@echo "macOS VPN Setup:"
-	@echo "  make macos-vpn-profile         - Generate macOS VPN profile (certificates)"
-	@echo "  make macos-vpn-profile-mdm     - Push cert profile via SimpleMDM"
-	@echo "  make macos-vpn-eap-profile     - Generate EAP profile (no certs, for User-Approved MDM)"
-	@echo "  make macos-vpn-eap-profile-mdm - Push EAP profile via SimpleMDM (RECOMMENDED)"
-	@echo "  make macos-pf-killswitch   - Generate pf firewall kill switch config"
-	@echo "  make macos-pf-install      - Install pf kill switch (requires sudo)"
-	@echo "  make macos-pf-uninstall    - Uninstall pf kill switch (requires sudo)"
+
 
 # ============================================================================
 # Daily Start/Stop (RECOMMENDED)
@@ -394,42 +387,4 @@ test-e2e-setup: ## Build and install WebDriverAgent (first-time setup)
 test-e2e-install: ## Install E2E test dependencies
 	$(PYTHON) -m pip install -r tests/e2e/requirements.txt
 
-# ============================================================================
-# macOS VPN Setup
-# ============================================================================
 
-macos-vpn-profile: ## Generate macOS VPN profile (.mobileconfig) - uses certificates
-	@./macos/scripts/generate-macos-vpn-profile.sh
-
-macos-vpn-profile-mdm: ## Push macOS VPN profile via SimpleMDM (certificate auth)
-	@./macos/scripts/push-macos-vpn-profile-mdm.sh
-
-macos-vpn-eap-profile: ## Generate macOS VPN EAP profile (no certificates, for User-Approved MDM)
-	@./macos/scripts/generate-macos-vpn-eap-profile.sh
-
-macos-vpn-eap-profile-mdm: ## Push macOS VPN EAP profile via SimpleMDM (password auth)
-	@./macos/scripts/push-macos-vpn-eap-profile-mdm.sh
-
-macos-pf-killswitch: ## Generate pf firewall kill switch configuration
-	@./macos/scripts/generate-pf-killswitch.sh
-
-macos-pf-install: ## Install pf kill switch (blocks internet without VPN)
-	@echo "Installing pf kill switch (requires sudo)..."
-	@sudo ./macos/scripts/install-pf-killswitch.sh
-
-macos-pf-uninstall: ## Uninstall pf kill switch (restores normal networking)
-	@echo "Uninstalling pf kill switch (requires sudo)..."
-	@sudo ./macos/scripts/uninstall-pf-killswitch.sh
-
-macos-location-install: ## Install location sender daemon on macOS (sends GPS to proxy)
-	@./macos/location-daemon/install.sh
-
-macos-location-uninstall: ## Uninstall location sender daemon from macOS
-	@echo "Uninstalling location sender..."
-	@launchctl unload ~/Library/LaunchAgents/com.hocuspocus.location-sender.plist 2>/dev/null || true
-	@rm -f ~/Library/LaunchAgents/com.hocuspocus.location-sender.plist
-	@sudo rm -f /usr/local/bin/hocuspocus-location-sender.py
-	@echo "Location sender uninstalled."
-
-macos-location-logs: ## View location sender logs
-	@tail -f /var/log/hocuspocus-location-sender.log
