@@ -16,6 +16,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MACOS_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_DIR="$(dirname "$MACOS_DIR")"
 OUTPUT_DIR="$MACOS_DIR/profiles"
+DEBUG_LOG_PATH="/Users/tushar/code/.cursor/debug.log"
+RUN_ID="${RUN_ID:-pre-fix}"
+
+log_ndjson() {
+    local hypothesis_id="$1"
+    local location="$2"
+    local message="$3"
+    local data="$4"
+    local timestamp
+    timestamp=$(($(date +%s) * 1000))
+    printf '%s\n' "{\"sessionId\":\"debug-session\",\"runId\":\"${RUN_ID}\",\"hypothesisId\":\"${hypothesis_id}\",\"location\":\"${location}\",\"message\":\"${message}\",\"data\":${data},\"timestamp\":${timestamp}}" >> "$DEBUG_LOG_PATH"
+}
 
 # Ensure output directory exists
 mkdir -p "$OUTPUT_DIR"
@@ -27,9 +39,16 @@ echo ""
 VPN_IP=$(kubectl get svc vpn-service -n hocuspocus -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
 if [ -z "$VPN_IP" ]; then
     echo "Error: Could not get VPN service IP. Is the cluster running?"
+    #region agent log
+    log_ndjson "H2" "generate-macos-vpn-profile.sh:34" "vpn_ip_missing" "{\"vpnIpPresent\":false}"
+    #endregion agent log
     exit 1
 fi
 echo "VPN Server IP: $VPN_IP"
+
+#region agent log
+log_ndjson "H2" "generate-macos-vpn-profile.sh:40" "vpn_ip_resolved" "{\"vpnIpPresent\":true,\"vpnIp\":\"${VPN_IP}\"}"
+#endregion agent log
 
 # Get certificates from VPN pod
 echo "Fetching certificates from VPN server..."
@@ -56,8 +75,19 @@ kubectl exec -n hocuspocus "$VPN_POD" -c strongswan -- cat /etc/ipsec.d/private/
 if [ ! -s "$TEMP_DIR/vpn-ca.pem" ] || [ ! -s "$TEMP_DIR/client.pem" ] || [ ! -s "$TEMP_DIR/client.key" ]; then
     echo "Error: Could not extract VPN certificates. The VPN may need to be restarted."
     echo "Run: kubectl rollout restart deployment/vpn-server -n hocuspocus"
+    #region agent log
+    log_ndjson "H3" "generate-macos-vpn-profile.sh:61" "vpn_cert_extract_failed" "{\"vpnCaBytes\":0,\"clientCertBytes\":0,\"clientKeyBytes\":0}"
+    #endregion agent log
     exit 1
 fi
+
+VPN_CA_BYTES=$(wc -c < "$TEMP_DIR/vpn-ca.pem" | tr -d ' ')
+CLIENT_CERT_BYTES=$(wc -c < "$TEMP_DIR/client.pem" | tr -d ' ')
+CLIENT_KEY_BYTES=$(wc -c < "$TEMP_DIR/client.key" | tr -d ' ')
+
+#region agent log
+log_ndjson "H3" "generate-macos-vpn-profile.sh:71" "vpn_cert_sizes" "{\"vpnCaBytes\":${VPN_CA_BYTES},\"clientCertBytes\":${CLIENT_CERT_BYTES},\"clientKeyBytes\":${CLIENT_KEY_BYTES}}"
+#endregion agent log
 
 # Get mitmproxy CA
 echo "Extracting mitmproxy CA..."
@@ -251,6 +281,12 @@ cat > "$PROFILE_PATH" << EOF
 </dict>
 </plist>
 EOF
+
+PROFILE_SIZE_BYTES=$(stat -f%z "$PROFILE_PATH")
+
+#region agent log
+log_ndjson "H1" "generate-macos-vpn-profile.sh:257" "profile_generated" "{\"profilePath\":\"${PROFILE_PATH}\",\"profileSizeBytes\":${PROFILE_SIZE_BYTES}}"
+#endregion agent log
 
 echo ""
 echo "=== macOS VPN Profile Generated ==="

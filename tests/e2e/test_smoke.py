@@ -31,41 +31,35 @@ class TestSmoke:
         options.browser_name = "Safari"
         options.automation_name = "XCUITest"
         options.no_reset = True
-        options.set_capability("autoAcceptAlerts", True)
+        options.set_capability("appium:autoAcceptAlerts", True)
 
         if device_type == 'simulator':
             options.platform_version = "26.2"
             options.device_name = "iPhone 17 Pro"
-            options.set_capability("wdaLaunchTimeout", 60000)
+            options.set_capability("appium:wdaLaunchTimeout", 60000)
         else:
             # Real device config
-            options.platform_version = "18.7.3"
-            options.device_name = "Tushar's iPhone"
-            options.udid = "00008020-0004695621DA002E"
-            options.set_capability("xcodeOrgId", "QG9U628JFD")
-            options.set_capability("xcodeSigningId", "iPhone Developer")
-            options.updated_wda_bundle_id = "com.hocuspocus.WebDriverAgentRunner"
-            options.set_capability("usePrebuiltWDA", True)
-            options.set_capability("wdaLaunchTimeout", 600000)  # 10 minutes - real devices can be slow
-            options.set_capability("wdaConnectionTimeout", 240000)  # 4 minutes
+            options.platform_version = os.getenv("IOS_PLATFORM_VERSION", "18.7.3")
+            options.device_name = os.getenv("IOS_DEVICE_NAME", "Tushar's iPhone")
+            options.udid = os.getenv("IOS_UDID", "00008020-0004695621DA002E")
+            options.set_capability("appium:xcodeOrgId", os.getenv("IOS_XCODE_ORG_ID", "QG9U628JFD"))
+            options.set_capability("appium:xcodeSigningId", os.getenv("IOS_XCODE_SIGNING_ID", "Apple Development"))
+            options.set_capability("appium:updatedWDABundleId", os.getenv("IOS_WDA_BUNDLE_ID", "com.hocuspocus.WebDriverAgentRunner"))
+            use_prebuilt = os.getenv("USE_PREBUILT_WDA", "true").lower() == "true"
+            options.set_capability("appium:usePrebuiltWDA", use_prebuilt)
+            # Keep WDA installed even if a session fails
+            options.set_capability("appium:skipUninstall", True)
+            options.set_capability("appium:wdaLaunchTimeout", 600000)  # 10 minutes - real devices can be slow
+            options.set_capability("appium:wdaConnectionTimeout", 240000)  # 4 minutes
 
         print("🔌 [SMOKE] Connecting to Appium at http://127.0.0.1:4723...")
 
         # Set longer timeout for session creation (WDA can take a while)
-        options.set_capability("newCommandTimeout", 300)  # 5 min command timeout
+        options.set_capability("appium:newCommandTimeout", 300)  # 5 min command timeout
 
         # Configure HTTP client with longer timeout for session creation
-        from appium.webdriver.appium_connection import AppiumConnection
-        from selenium.webdriver.remote.client_config import ClientConfig
-
-        client_config = ClientConfig(
-            remote_server_addr="http://127.0.0.1:4723",
-            timeout=600  # 10 minutes for HTTP requests (real devices can be slow)
-        )
-        appium_connection = AppiumConnection(client_config=client_config)
-
         driver = webdriver.Remote(
-            command_executor=appium_connection,
+            command_executor="http://127.0.0.1:4723",
             options=options
         )
         print("✅ [SMOKE] Appium connection successful!")

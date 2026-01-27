@@ -35,3 +35,9 @@
 ## Other Wishlist Items
 
 (Add future wishlist items here)
+
+---
+
+## Related setup docs
+
+- iPhone E2E/Appium/WebDriverAgent setup: `tests/e2e/README.md`

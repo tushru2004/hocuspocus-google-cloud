@@ -1,5 +1,8 @@
 # Mac DFU Mode Instructions
 
+> Note: This document is for **macOS supervision/restore** workflows only.
+> For **iPhone E2E/Appium/WebDriverAgent** setup, see `tests/e2e/README.md` in the repo root.
+
 ## Enter DFU Mode from Setup Assistant (Language Screen)
 
 1. Make sure **USB-C cable** is connected to Admin Mac (use **left-most port** on both Macs)

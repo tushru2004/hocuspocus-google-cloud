@@ -367,6 +367,10 @@ The following projects are archived in `/Users/tushar/code/archive/`:
 
 End-to-end tests run on a **real iOS device** connected via USB with **AlwaysOn VPN active**. The `ServiceExceptions > DeviceCommunication: Allow` setting in the VPN profile allows Xcode/Appium to communicate with the device while VPN filters all other traffic.
 
+### Canonical setup doc
+
+For full setup + troubleshooting (VPN profile, mitmproxy CA trust, Developer Mode, WebDriverAgent install/trust), see `tests/e2e/README.md`.
+
 ### Device Identifiers
 - **Device UDID**: `00008020-0004695621DA002E`
 - **CoreDevice ID**: `296F513E-BA5A-5CC7-AF1B-8FF4690EE17A`
@@ -390,11 +394,14 @@ make appium-stop         # Stop Appium server
 make appium-restart      # Restart Appium server
 make appium-logs         # Show Appium logs (tail -f)
 
-# Run tests
+# Run tests (test DB)
 make test-e2e            # Run all E2E tests
 make test-e2e-flows      # Main flow tests only
 make test-e2e-overlay    # Location overlay tests only
 make test-e2e-smoke      # Quick connectivity check
+
+# Run prod verification (prod DB)
+make verify-vpn-appium-prod
 ```
 
 ### Test Cases
@@ -482,6 +489,55 @@ make verify-vpn-appium-prod   # Full: Uses Appium, bypasses browser cache (~2 mi
 kubectl logs -n hocuspocus deployment/mitmproxy --tail=50 | grep -E "(YouTube|ALLOWED|BLOCKED|approved)"
 ```
 
+## Content Filtering Architecture
+
+The proxy has **two separate filtering mechanisms**:
+
+### 1. Global Domain Whitelist (Always Active)
+- Only domains in `allowed_hosts` table can be accessed
+- If domain NOT in whitelist → blocked everywhere
+- Example: `twitter.com` blocked because it's NOT whitelisted
+
+### 2. Location-Based Blocking (At Specific Locations Only)
+- When device is inside a "blocked location" radius, stricter rules apply
+- Only domains in the **per-location whitelist** for that location are allowed
+- Example: At "Social Hub Vienna", only `cnbc.com` (if whitelisted for that location) works
+
+### SimpleMDM Location Tracking
+
+```
+SimpleMDM polls iPhone location every 30 seconds
+        ↓
+location-poller sidecar fetches from SimpleMDM API
+        ↓
+Stores in `device_locations` table (device_id, lat, lng, timestamp)
+        ↓
+When iPhone makes a request, mitmproxy:
+  1. Maps VPN IP (10.10.10.10) → device ID (2154382)
+  2. Looks up device location from DB
+  3. Checks if device is inside any "blocked location" radius
+  4. If inside → apply per-location whitelist
+  5. If outside → apply global whitelist
+```
+
+**Check current state:**
+```bash
+# Global whitelist
+kubectl exec -n hocuspocus postgres-0 -- psql -U mitmproxy -d mitmproxy \
+  -c "SELECT domain FROM allowed_hosts WHERE enabled = true LIMIT 20;"
+
+# Blocked locations
+kubectl exec -n hocuspocus postgres-0 -- psql -U mitmproxy -d mitmproxy \
+  -c "SELECT name, latitude, longitude, radius_meters FROM blocked_locations;"
+
+# Device locations (from SimpleMDM)
+kubectl exec -n hocuspocus postgres-0 -- psql -U mitmproxy -d mitmproxy \
+  -c "SELECT device_id, latitude, longitude, fetched_at FROM device_locations;"
+
+# Location-poller logs
+kubectl logs -n hocuspocus deployment/mitmproxy -c location-poller --tail=10
+```
+
 ## YouTube Channel Filtering
 
 YouTube channel filtering blocks videos from non-whitelisted channels while allowing whitelisted ones (e.g., JRE).
@@ -563,6 +619,21 @@ make test-location-whitelist  # Must be physically at a blocked location
 
 For setting up VPN filtering on macOS devices, see [macos/DFU-MODE.md](macos/DFU-MODE.md) for DFU mode instructions and [macos/README.md](macos/README.md) for full setup guide.
 
+### SimpleMDM User-Approved MDM (macOS 26+)
+- Use the **EAP IKEv2** profile with **device scope** (`PayloadScope=System`).
+- Profile generator: `macos/scripts/generate-macos-vpn-eap-profile.sh`
+- Push script: `macos/scripts/push-macos-vpn-eap-profile-mdm.sh`
+- Crypto: DH Group 19 for IKE and Child SAs.
+- Both VPN and mitmproxy CA profiles are device-wide.
+
+### Mitmproxy TLS Trust (macOS)
+If mitmproxy logs `Client TLS handshake failed ... certificate unknown`, install the proxy CA at **device scope**
+so system processes (including MDM) trust the MITM:
+```bash
+./macos/scripts/generate-macos-mitmproxy-ca-profile.sh
+./macos/scripts/push-macos-mitmproxy-ca-profile-mdm.sh
+```
+
 ### Quick Reference
 ```bash
 make macos-vpn-profile      # Generate macOS VPN profile
@@ -607,18 +678,37 @@ macOS cannot be truly supervised without Apple Business Manager (ABM). As a work
 
 ### SSH to MacBook Air
 
-The MacBook Air is accessible via Tailscale:
+The MacBook Air is accessible via Tailscale. **Important:** Use hostname, not IP (IP can change).
 
 ```bash
-# SSH via Tailscale
-ssh tushru2004@100.69.178.103
-
-# Or using Tailscale hostname
+# SSH via Tailscale hostname (RECOMMENDED - IP changes)
 ssh tushru2004@tushru2004s-macbook-air
 
-# Run Homebrew commands (not in default PATH)
+# CRITICAL: SSH doesn't load /opt/homebrew/bin by default
+# Always set PATH for Homebrew tools (node, npm, appium, etc.):
+export PATH=/opt/homebrew/bin:$PATH
+
+# Or use full paths directly:
+/opt/homebrew/bin/appium
+/opt/homebrew/bin/node --version
 /opt/homebrew/bin/brew install <package>
 /opt/homebrew/bin/python3.12 -m pip install <package>
+```
+
+### Running Appium on MacBook Air (via SSH)
+
+```bash
+# Check if Appium is running
+ssh tushru2004@tushru2004s-macbook-air "pgrep -l node"  # Appium runs as node
+
+# Kill and restart Appium (fixes port 4723 in use)
+ssh tushru2004@tushru2004s-macbook-air "pkill -f appium; sleep 2; export PATH=/opt/homebrew/bin:\$PATH && nohup appium > /tmp/appium.log 2>&1 & sleep 3 && pgrep -l node"
+
+# Check Appium logs
+ssh tushru2004@tushru2004s-macbook-air "tail -50 /tmp/appium.log"
+
+# Run E2E tests remotely
+ssh tushru2004@tushru2004s-macbook-air "export PATH=/opt/homebrew/bin:\$PATH && cd /Users/tushru2004/hocuspocus-vpn && source .venv/bin/activate && USE_PREBUILT_WDA=true IOS_DERIVED_DATA_PATH=/tmp/wda-dd python -m pytest tests/e2e_prod/test_verify_vpn.py -v --tb=short"
 ```
 
 ### macOS Location Daemon

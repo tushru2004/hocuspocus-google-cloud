@@ -1,6 +1,37 @@
-# Hocuspocus VPN - Oracle Kubernetes Engine (GitOps)
+# Hocuspocus VPN (GKE)
 
-Full Kubernetes-based VPN setup on Oracle Cloud with GitOps deployment via ArgoCD.
+This repo is the **Hocuspocus VPN + mitmproxy filtering stack** deployed on **Google Kubernetes Engine (GKE)**.
+
+## Quick Start (Daily)
+
+```bash
+cd /Users/tushar/code/hocuspocus-vpn
+
+# Start the cluster workloads (recommended daily flow)
+make startgcvpn
+
+# Verify VPN filtering quickly (USB Safari automation, no Appium)
+make verify-vpn
+
+# Full production verification (Appium + WebDriverAgent; uses prod DB)
+make appium
+make verify-vpn-appium-prod
+```
+
+## iPhone E2E Setup (Real Device)
+
+The canonical guide lives in `tests/e2e/README.md` (covers: VPN profile, mitmproxy CA trust, Developer Mode, WebDriverAgent install + trust, and how to run both E2E suites).
+
+## Test Suites
+
+- **Full E2E (test DB)**: `make test-e2e` (uses `mitmproxy_e2e_tests`)
+- **Prod verification (prod DB)**: `make verify-vpn-appium-prod` (uses `mitmproxy`)
+
+---
+
+## Archive: Oracle OKE GitOps (outdated)
+
+The section below documents an older Oracle OKE GitOps setup and is kept for reference only.
 
 ## Architecture
 

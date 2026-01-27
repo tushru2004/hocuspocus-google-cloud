@@ -77,32 +77,34 @@ class TestLocationOverlay:
 
         # KEY DIFFERENCE: Do NOT auto-accept alerts
         # This allows us to see the location overlay before permission is granted
-        options.set_capability("autoAcceptAlerts", False)
+        options.set_capability("appium:autoAcceptAlerts", False)
 
         if device_type == 'simulator':
             options.platform_version = "26.2"
             options.device_name = "iPhone 17 Pro"
-            options.set_capability("wdaLaunchTimeout", 60000)
+            options.set_capability("appium:wdaLaunchTimeout", 60000)
         else:
-            options.platform_version = "18.7.3"
-            options.device_name = "Tushar's iPhone"
-            options.udid = "00008020-0004695621DA002E"
-            options.show_xcode_log = True
+            options.platform_version = os.getenv("IOS_PLATFORM_VERSION", "18.7.3")
+            options.device_name = os.getenv("IOS_DEVICE_NAME", "Tushar's iPhone")
+            options.udid = os.getenv("IOS_UDID", "00008020-0004695621DA002E")
+            options.set_capability("appium:showXcodeLog", True)
 
             # WebDriverAgent code signing configuration for real device
             # These settings survive Appium reinstalls (no need to reconfigure Xcode)
-            options.set_capability("xcodeOrgId", "QG9U628JFD")  # Apple Team ID
-            options.set_capability("xcodeSigningId", "iPhone Developer")
-            options.updated_wda_bundle_id = "com.hocuspocus.WebDriverAgentRunner"
+            options.set_capability("appium:xcodeOrgId", os.getenv("IOS_XCODE_ORG_ID", "QG9U628JFD"))  # Apple Team ID
+            options.set_capability("appium:xcodeSigningId", os.getenv("IOS_XCODE_SIGNING_ID", "Apple Development"))
+            options.set_capability("appium:updatedWDABundleId", os.getenv("IOS_WDA_BUNDLE_ID", "com.hocuspocus.WebDriverAgentRunner"))
 
             # After fresh Appium install, run once with: USE_PREBUILT_WDA=false make test-e2e
             # This builds and installs WDA. Subsequent runs use prebuilt (faster).
             use_prebuilt = os.getenv("USE_PREBUILT_WDA", "true").lower() == "true"
-            options.set_capability("usePrebuiltWDA", use_prebuilt)
-            options.set_capability("useXctestrunFile", False)
-            options.set_capability("wdaLaunchTimeout", 120000)
-            options.set_capability("wdaConnectionTimeout", 120000)
-            options.set_capability("clearSystemFiles", True)
+            options.set_capability("appium:usePrebuiltWDA", use_prebuilt)
+            # Keep WDA installed so the trust prompt persists if a run fails
+            options.set_capability("appium:skipUninstall", True)
+            options.set_capability("appium:useXctestrunFile", False)
+            options.set_capability("appium:wdaLaunchTimeout", 120000)
+            options.set_capability("appium:wdaConnectionTimeout", 120000)
+            options.set_capability("appium:clearSystemFiles", True)
 
         print("🍎 [FIXTURE] Connecting to Appium at http://127.0.0.1:4723...")
         driver = webdriver.Remote(

@@ -129,7 +129,7 @@ class TestIOSProxyFlows:
         options.full_reset = False
 
         # Automatically accept location permission alerts
-        options.set_capability("autoAcceptAlerts", True)
+        options.set_capability("appium:autoAcceptAlerts", True)
 
         if device_type == 'simulator':
             # iOS Simulator configuration
@@ -139,29 +139,31 @@ class TestIOSProxyFlows:
             # UDID will be auto-detected for booted simulator
 
             # Simulator doesn't need WDA configuration
-            options.set_capability("wdaLaunchTimeout", 60000)
+            options.set_capability("appium:wdaLaunchTimeout", 60000)
         else:
             # Real device configuration
             logging.info("📱 Configuring for Real iOS Device")
-            options.platform_version = "18.7.3"
-            options.device_name = "Tushar's iPhone"
-            options.udid = "00008020-0004695621DA002E"
-            options.show_xcode_log = True
+            options.platform_version = os.getenv("IOS_PLATFORM_VERSION", "18.7.3")
+            options.device_name = os.getenv("IOS_DEVICE_NAME", "Tushar's iPhone")
+            options.udid = os.getenv("IOS_UDID", "00008020-0004695621DA002E")
+            options.set_capability("appium:showXcodeLog", True)
 
             # WebDriverAgent code signing configuration for real device
             # These settings survive Appium reinstalls (no need to reconfigure Xcode)
-            options.set_capability("xcodeOrgId", "QG9U628JFD")  # Apple Team ID
-            options.set_capability("xcodeSigningId", "iPhone Developer")
-            options.updated_wda_bundle_id = "com.hocuspocus.WebDriverAgentRunner"
+            options.set_capability("appium:xcodeOrgId", os.getenv("IOS_XCODE_ORG_ID", "QG9U628JFD"))  # Apple Team ID
+            options.set_capability("appium:xcodeSigningId", os.getenv("IOS_XCODE_SIGNING_ID", "Apple Development"))
+            options.set_capability("appium:updatedWDABundleId", os.getenv("IOS_WDA_BUNDLE_ID", "com.hocuspocus.WebDriverAgentRunner"))
 
             # After fresh Appium install, run once with: USE_PREBUILT_WDA=false make test-e2e
             # This builds and installs WDA. Subsequent runs use prebuilt (faster).
             use_prebuilt = os.getenv("USE_PREBUILT_WDA", "true").lower() == "true"
-            options.set_capability("usePrebuiltWDA", use_prebuilt)
-            options.set_capability("useXctestrunFile", False)
-            options.set_capability("wdaLaunchTimeout", 120000)
-            options.set_capability("wdaConnectionTimeout", 120000)
-            options.set_capability("clearSystemFiles", True)
+            options.set_capability("appium:usePrebuiltWDA", use_prebuilt)
+            # Keep WDA installed so the trust prompt persists if a run fails
+            options.set_capability("appium:skipUninstall", True)
+            options.set_capability("appium:useXctestrunFile", False)
+            options.set_capability("appium:wdaLaunchTimeout", 120000)
+            options.set_capability("appium:wdaConnectionTimeout", 120000)
+            options.set_capability("appium:clearSystemFiles", True)
 
             # Set default safe location for real device (doesn't work on iOS 17+, but doesn't hurt)
             logging.info("📍 Attempting to set default GPS location (may not work on iOS 17+)")

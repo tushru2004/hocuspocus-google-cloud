@@ -34,6 +34,31 @@ class PostgresLocationRepository:
                         )
                     )
                     conn.commit()
+
+            # Also update current device location status in device_locations
+            # This ensures that manual location updates (via script/endpoint) are considered "fresh"
+            # by the blocking logic, which checks device_locations.
+            with psycopg.connect(self._connection_string) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """INSERT INTO device_locations
+                           (device_id, latitude, longitude, accuracy, location_updated_at, fetched_at)
+                           VALUES (%s, %s, %s, %s, %s, NOW())
+                           ON CONFLICT (device_id) DO UPDATE SET
+                           latitude = EXCLUDED.latitude,
+                           longitude = EXCLUDED.longitude,
+                           accuracy = EXCLUDED.accuracy,
+                           location_updated_at = EXCLUDED.location_updated_at,
+                           fetched_at = EXCLUDED.fetched_at""",
+                        (
+                            location_data.device_id,
+                            location_data.coordinates.latitude,
+                            location_data.coordinates.longitude,
+                            location_data.accuracy,
+                            location_data.timestamp
+                        )
+                    )
+                    conn.commit()
         except Exception as e:
             logging.error(f"❌ Failed to store location in database: {e}")
             raise

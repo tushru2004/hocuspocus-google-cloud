@@ -2,17 +2,45 @@
 
 These E2E tests run on a **real iOS device** connected to the VPN proxy to verify the full system works correctly.
 
+If you're looking for the detailed setup guide, see `tests/e2e/README.md`.
+
 ## Quick Start
 
 ```bash
-# 1. Start Appium server (in separate terminal)
-appium
+cd /Users/tushar/code/hocuspocus-vpn
 
-# 2. Run all E2E tests (using Makefile)
+# Start Appium
+make appium
+
+# Full E2E suite (test DB)
 make test-e2e
 
-# Or run directly with pytest:
-PYTHONPATH=src pytest tests/e2e/ -v
+# Production verification suite (prod DB)
+make verify-vpn-appium-prod
+```
+
+## Running from MacBook Pro (Tests on MacBook Air via SSH)
+
+The iPhone is connected to the MacBook Air. To run tests remotely:
+
+```bash
+# SSH uses Tailscale hostname (IP can change)
+ssh tushru2004@tushru2004s-macbook-air
+
+# IMPORTANT: SSH doesn't load /opt/homebrew/bin by default
+# Always set PATH for Homebrew tools (node, npm, appium):
+export PATH=/opt/homebrew/bin:$PATH
+
+# Kill and restart Appium (fixes "port 4723 in use" errors)
+pkill -f appium; sleep 2
+nohup appium > /tmp/appium.log 2>&1 &
+sleep 3 && pgrep -l node  # Verify it's running
+
+# One-liner from MacBook Pro:
+ssh tushru2004@tushru2004s-macbook-air "pkill -f appium; sleep 2; export PATH=/opt/homebrew/bin:\$PATH && nohup appium > /tmp/appium.log 2>&1 & sleep 3 && pgrep -l node"
+
+# Run tests remotely:
+ssh tushru2004@tushru2004s-macbook-air "export PATH=/opt/homebrew/bin:\$PATH && cd /Users/tushru2004/hocuspocus-vpn && source .venv/bin/activate && USE_PREBUILT_WDA=true IOS_DERIVED_DATA_PATH=/tmp/wda-dd python -m pytest tests/e2e_prod/test_verify_vpn.py -v --tb=short"
 ```
 
 ## Prerequisites
@@ -27,23 +55,23 @@ PYTHONPATH=src pytest tests/e2e/ -v
 ### 2. Software Requirements
 
 ```bash
-# Install Appium globally
+# One-time: Appium + iOS driver
 npm install -g appium
-
-# Install XCUITest driver for iOS
 appium driver install xcuitest
 
-# Install Python dependencies
-pip install appium-python-client pytest
+# One-time: python deps (repo venv)
+cd /Users/tushar/code/hocuspocus-vpn
+make test-e2e-install
 ```
 
-### 3. VPN Server Running
+### 3. VPN/Cluster Running (GKE)
 
-Ensure the AWS VPN server is running:
+Ensure the GKE workloads are running:
 
 ```bash
-cd terraform/vpn
-terraform output vpn_server_public_ip
+cd /Users/tushar/code/hocuspocus-vpn
+make startgcvpn
+make pods
 ```
 
 The tests will fail with a timeout error if the VPN server is not reachable.
@@ -130,18 +158,114 @@ Tests automatically seed the database with test data via `conftest.py`. The seed
 
 ## Troubleshooting
 
+### Understanding Test Results: Why is X Blocked/Allowed?
+
+The tests verify **two separate filtering mechanisms**:
+
+1. **Global Domain Whitelist Tests** (`test_google_allowed`, `test_twitter_blocked`)
+   - `google.com` → allowed because it's in `allowed_hosts` table
+   - `twitter.com` → blocked because it's NOT in `allowed_hosts` table
+   - **Location doesn't matter** for these tests
+
+2. **Location Whitelist Tests** (`TestLocationWhitelist`)
+   - Only run when physically at a blocked location (e.g., Social Hub Vienna)
+   - Test that per-location whitelist domains work at blocked locations
+
+**To check what's whitelisted:**
+```bash
+# Global whitelist
+kubectl exec -n hocuspocus postgres-0 -- psql -U mitmproxy -d mitmproxy \
+  -c "SELECT domain FROM allowed_hosts WHERE enabled = true ORDER BY domain;"
+
+# Blocked locations
+kubectl exec -n hocuspocus postgres-0 -- psql -U mitmproxy -d mitmproxy \
+  -c "SELECT name, latitude, longitude, radius_meters FROM blocked_locations;"
+
+# Current device location (SimpleMDM polling)
+kubectl exec -n hocuspocus postgres-0 -- psql -U mitmproxy -d mitmproxy \
+  -c "SELECT device_id, latitude, longitude, fetched_at FROM device_locations;"
+```
+
+### How SimpleMDM Location Tracking Works
+
+```
+SimpleMDM polls iPhone location every 30 seconds
+        ↓
+location-poller sidecar fetches from SimpleMDM API
+        ↓
+Stores in `device_locations` table
+        ↓
+Proxy reads location on each request (no JavaScript injection needed)
+```
+
+Check location-poller logs:
+```bash
+kubectl logs -n hocuspocus deployment/mitmproxy -c location-poller --tail=20
+```
+
+### Testing Location-Based Blocking (Fake Location Injection)
+
+You don't need to be physically at a blocked location to test location-based blocking.
+The tests can **inject fake locations directly into the database**.
+
+```python
+# In test:
+def test_at_blocked_location(fake_location):
+    fake_location("social_hub_vienna")  # Inject fake location
+    # ... test runs with device "at" Social Hub Vienna ...
+    # Location auto-restored after test
+```
+
+**Available fake locations:**
+- `social_hub_vienna` - The Social Hub Vienna (lat=48.222, lng=16.390)
+- `john_harris` - John Harris Fitness (lat=48.201, lng=16.364)
+- `test_school_sf` - Test School SF (lat=37.774, lng=-122.419)
+
+**Or use custom coordinates:**
+```python
+fake_location(lat=48.123, lng=16.456)
+```
+
+**Manual location injection (for debugging):**
+```bash
+# Set device to Social Hub Vienna
+kubectl exec -n hocuspocus postgres-0 -- psql -U mitmproxy -d mitmproxy \
+  -c "UPDATE device_locations SET latitude=48.222861, longitude=16.390007 WHERE device_id='2154382';"
+
+# Restore to real location (SimpleMDM will overwrite in ~30s anyway)
+kubectl exec -n hocuspocus postgres-0 -- psql -U mitmproxy -d mitmproxy \
+  -c "SELECT * FROM device_locations;"
+```
+
 ### Error: "xcodebuild failed with code 65"
 
-**Cause:** WebDriverAgent is not properly signed or installed on the device.
+**Possible causes:**
 
-**Solution:**
-1. Open WebDriverAgent.xcodeproj in Xcode
-2. Select **WebDriverAgentRunner** target
-3. Go to Signing & Capabilities
-4. Select your Team and set Bundle Identifier
+1. **iPhone has not trusted the Developer App certificate**
+   - Solution: Settings → General → VPN & Device Management → Trust developer cert
+
+2. **"The identity used to sign the executable is no longer valid"**
+   - The signing certificate expired or mismatched
+   - Solution: In Xcode, clean build folder (Cmd+Shift+K), rebuild WDA (Cmd+U)
+
+3. **"The file couldn't be opened because it doesn't exist"**
+   - Wrong target built (IntegrationApp instead of WebDriverAgentRunner)
+   - Solution: In Xcode, select **WebDriverAgentRunner** scheme, then Cmd+U
+
+4. **Provisioning profile issues**
+   - Solution: Xcode → Signing & Capabilities → Select your Team → let Xcode manage signing
+
+**Full rebuild steps:**
+1. Open WebDriverAgent.xcodeproj in Xcode:
+   ```bash
+   open ~/.appium/node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent/WebDriverAgent.xcodeproj
+   ```
+2. Select **WebDriverAgentRunner** scheme (not IntegrationApp)
+3. Select your Team in Signing & Capabilities
+4. Set Bundle Identifier (e.g., `com.yourname.WebDriverAgentRunner`)
 5. Select your iPhone as target device
-6. Press Cmd+U to build and install
-7. Set `usePrebuiltWDA: True` in test config (already configured)
+6. Press **Cmd+U** to build and run tests
+7. Trust developer cert on iPhone if prompted
 
 ### Error: "Maximum App ID limit reached"
 
@@ -157,24 +281,16 @@ Tests automatically seed the database with test data via `conftest.py`. The seed
 
 ### Error: "VPN server not responding" / Timeout
 
-**Cause:** The AWS EC2 instance running the VPN server is stopped or unreachable.
+**Cause:** GKE VPN/mitmproxy isn’t running or the device isn’t actually connected to VPN.
 
 **Solution:**
-1. Start the EC2 instance:
-   ```bash
-   cd terraform/vpn
-   terraform apply
-   ```
-2. Verify the server is running:
-   ```bash
-   terraform output vpn_server_public_ip
-   # Try to reach it
-   curl -s --connect-timeout 5 http://$(terraform output -raw vpn_server_public_ip):22 || echo "Server reachable"
-   ```
+1. Start cluster: `make startgcvpn`
+2. Verify pods: `make pods`
+3. Verify iPhone VPN is connected (Always-On profile active)
 
-### Error: "Port #8100 is occupied"
+### Error: "Port #8100 is occupied" or "Port 4723 in use"
 
-**Cause:** A previous WebDriverAgent session is still running.
+**Cause:** A previous WebDriverAgent/Appium session is still running.
 
 **Solution:**
 ```bash
@@ -182,6 +298,9 @@ Tests automatically seed the database with test data via `conftest.py`. The seed
 pkill -f appium
 sleep 2
 appium
+
+# If running via SSH to MacBook Air (must set PATH):
+ssh tushru2004@tushru2004s-macbook-air "pkill -f appium; sleep 2; export PATH=/opt/homebrew/bin:\$PATH && nohup appium > /tmp/appium.log 2>&1 & sleep 3 && pgrep -l node"
 ```
 
 ### Error: "Unable to launch WebDriverAgent"

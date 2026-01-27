@@ -6,6 +6,27 @@ VPN profile installation fails on MacBook Air with "certificate cannot be verifi
 1. SimpleMDM push (profiles never arrive)
 2. Manual profile installation (authentication error)
 
+## Resolution (2026-01-26)
+
+### What Fixed It
+- **User-scope EAP IKEv2 profile** (no PKCS12/client cert payloads)
+- **Device-scope mitmproxy CA profile** so system processes trust HTTPS interception
+- Remove temporary Test VPN profiles after verification
+
+### Steps
+```bash
+./macos/scripts/generate-macos-vpn-eap-profile.sh
+./macos/scripts/push-macos-vpn-eap-profile-mdm.sh
+
+./macos/scripts/generate-macos-mitmproxy-ca-profile.sh
+./macos/scripts/push-macos-mitmproxy-ca-profile-mdm.sh
+```
+
+### Verification
+- System Settings → VPN shows "Hocuspocus VPN (macOS Device EAP)"
+- Logs show `NEIKEv2Provider ... Tunnel Status: UP`
+- Mitmproxy no longer logs `certificate unknown` (remaining blocks are location-policy).
+
 ## Device Details
 
 - **Device:** MacBook Air (M2, 2023) - Mac14,15
@@ -149,3 +170,7 @@ security verify-cert -c /path/to/cert.pem
 - iPhone profile installation works fine via SimpleMDM
 - iPhone uses same CA and certificate structure
 - Difference: iPhone is supervised via Apple Configurator (not user-approved MDM)
+
+## Related setup docs
+
+- iPhone E2E/Appium/WebDriverAgent setup: `tests/e2e/README.md`

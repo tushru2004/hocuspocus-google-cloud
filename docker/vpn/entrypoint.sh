@@ -14,6 +14,11 @@ GCS_BUCKET="${GCS_CERT_BUCKET:-gs://hocuspocus-vpn-vpn-certs/vpn}"
 # Format: DEVICE_NAME:FIXED_IP
 DEVICES="iphone:10.10.10.10 macbook-air:10.10.10.20"
 
+# EAP credentials for macOS devices using User-Approved MDM
+# These devices can't receive certificate profiles via SimpleMDM, so they use password auth
+# Format: DEVICE_NAME:USERNAME:PASSWORD:FIXED_IP
+EAP_DEVICES="macbook-air:vpnuser:Dvq0bsdRYCR1Lz54JJDj7PWihNGVqkui:10.10.10.20"
+
 # Function to download certs from GCS
 download_certs_from_gcs() {
     echo "Downloading certificates from GCS..."
@@ -249,10 +254,59 @@ done
 
 echo "IPsec configuration generated with per-device connections"
 
-# Configure secrets for certificate auth
+# Add EAP connections for macOS devices that can't use certificate profiles via MDM
+# These use username/password authentication instead
+for eap_config in $EAP_DEVICES; do
+    device_name=$(echo "$eap_config" | cut -d: -f1)
+    eap_user=$(echo "$eap_config" | cut -d: -f2)
+    eap_pass=$(echo "$eap_config" | cut -d: -f3)
+    device_ip=$(echo "$eap_config" | cut -d: -f4)
+    echo "Adding EAP connection for device: $device_name (user: $eap_user, IP: $device_ip)"
+
+    cat >> /etc/ipsec.conf <<EOF
+
+# EAP connection for $device_name - uses password auth for User-Approved MDM
+# This allows SimpleMDM to push VPN profiles without certificate payloads
+conn ikev2-eap-$device_name
+    auto=add
+    compress=no
+    type=tunnel
+    keyexchange=ikev2
+    fragmentation=yes
+    forceencaps=yes
+    dpdaction=clear
+    dpddelay=300s
+    rekey=no
+    left=%any
+    leftid=$SERVER_IP
+    leftauth=pubkey
+    leftcert=server-cert.pem
+    leftsendcert=always
+    leftsubnet=0.0.0.0/0
+    right=%any
+    rightid=$eap_user
+    rightauth=eap-mschapv2
+    eap_identity=%identity
+    rightsourceip=$device_ip
+    rightdns=8.8.8.8,8.8.4.4
+    ike=aes256-sha256-modp2048,aes256-sha1-modp2048,aes256-sha256-ecp256!
+    esp=aes256-sha256,aes256-sha1!
+EOF
+done
+
+echo "IPsec configuration generated with EAP connections"
+
+# Configure secrets for certificate auth AND EAP users
 cat > /etc/ipsec.secrets <<EOF
 : RSA "server-key.pem"
 EOF
+
+# Add EAP user credentials
+for eap_config in $EAP_DEVICES; do
+    eap_user=$(echo "$eap_config" | cut -d: -f2)
+    eap_pass=$(echo "$eap_config" | cut -d: -f3)
+    echo "$eap_user : EAP \"$eap_pass\"" >> /etc/ipsec.secrets
+done
 
 chmod 600 /etc/ipsec.secrets
 

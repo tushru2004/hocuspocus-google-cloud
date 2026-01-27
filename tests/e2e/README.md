@@ -5,14 +5,16 @@ These E2E tests run on a **real iOS device** connected to the VPN proxy to verif
 ## Quick Start
 
 ```bash
-# 1. Start Appium server (in separate terminal)
-appium
+cd /Users/tushar/code/hocuspocus-vpn
 
-# 2. Run all E2E tests (using Makefile)
+# Start Appium
+make appium
+
+# Run full E2E suite (uses test database: mitmproxy_e2e_tests)
 make test-e2e
 
-# Or run directly with pytest:
-PYTHONPATH=src pytest tests/e2e/ -v
+# Run production verification suite (uses prod database: mitmproxy)
+make verify-vpn-appium-prod
 ```
 
 ## Prerequisites
@@ -22,28 +24,29 @@ PYTHONPATH=src pytest tests/e2e/ -v
 - Real iPhone connected via USB with:
   - IKEv2 VPN profile installed and connected
   - Developer mode enabled
-  - Trusted developer certificate
+  - Mitmproxy CA trusted
+  - Trusted Developer App certificate (for WebDriverAgent)
 
 ### 2. Software Requirements
 
 ```bash
-# Install Appium globally
+# One-time: Appium + iOS driver
 npm install -g appium
-
-# Install XCUITest driver for iOS
 appium driver install xcuitest
 
-# Install Python dependencies
-pip install appium-python-client pytest
+# One-time: python deps (repo venv)
+cd /Users/tushar/code/hocuspocus-vpn
+make test-e2e-install
 ```
 
-### 3. VPN Server Running
+### 3. VPN/Cluster Running (GKE)
 
-Ensure the AWS VPN server is running:
+Ensure the GKE workloads are running:
 
 ```bash
-cd terraform/vpn
-terraform output vpn_server_public_ip
+cd /Users/tushar/code/hocuspocus-vpn
+make startgcvpn
+make pods
 ```
 
 The tests will fail with a timeout error if the VPN server is not reachable.
@@ -52,33 +55,41 @@ The tests will fail with a timeout error if the VPN server is not reachable.
 
 WebDriverAgent (WDA) must be built and installed on your iPhone. **This is the most common source of test failures.**
 
-#### Step-by-step Setup:
+#### Step-by-step setup (iPhone XR in this repo)
 
-1. **Open WebDriverAgent in Xcode:**
+1. **Enable Developer Mode (iPhone)**
+   - Settings → Privacy & Security → Developer Mode → ON (requires reboot)
+
+2. **Install the VPN profile + keep VPN connected**
+   - Recommended: `make vpn-profile-mdm DEVICE=iphone`
+   - Ensure the profile includes `ServiceExceptions` with `DeviceCommunication: Allow` so Xcode/Appium can talk to the device even with Always-On VPN.
+
+3. **Trust the mitmproxy CA (iPhone)**
+   - Settings → General → About → Certificate Trust Settings → enable “mitmproxy”
+
+4. **Install WDA onto the iPhone (Mac)**
+   - Keep the iPhone **unlocked**
+   - Run:
+
    ```bash
-   open ~/.appium/node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent/WebDriverAgent.xcodeproj
+   cd /Users/tushar/code/hocuspocus-vpn
+   make test-e2e-setup
    ```
 
-2. **Select the WebDriverAgentRunner target** (not IntegrationApp)
+   If you need a manual build (useful when debugging `xcodebuild` failures):
 
-3. **Configure Signing:**
-   - Go to **Signing & Capabilities** tab
-   - Select your Team (personal or organization)
-   - Set a unique Bundle Identifier (e.g., `com.yourname.WebDriverAgentRunner`)
+   ```bash
+   xcodebuild -project "/Users/tushar/.appium/node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent/WebDriverAgent.xcodeproj" \
+     -scheme WebDriverAgentRunner \
+     -destination "id=00008020-0004695621DA002E" \
+     test -allowProvisioningUpdates \
+     DEVELOPMENT_TEAM=QG9U628JFD \
+     CODE_SIGN_IDENTITY="Apple Development"
+   ```
 
-   > **Important:** Free Apple Developer accounts have a limit of 10 App IDs per 7 days. If you hit this limit, reuse an existing Bundle ID.
-
-4. **Select your iPhone as the target device:**
-   - Click the device dropdown next to the scheme selector
-   - Choose your connected iPhone
-
-5. **Build and run WebDriverAgent:**
-   - Press **Cmd+U** (Product → Test)
-   - This builds WDA and installs it on your iPhone
-
-6. **Trust the developer certificate on iPhone:**
-   - Go to Settings → General → VPN & Device Management
-   - Find your developer certificate and tap "Trust"
+5. **Trust the Developer App certificate (iPhone)**
+   - Settings → General → VPN & Device Management → Developer App → Trust
+   - If you don’t see “Developer App”, run the `xcodebuild ... test` command once; it installs `WebDriverAgentRunner-Runner` and iOS will then show the trust entry.
 
 ## Test Configuration
 
@@ -130,18 +141,54 @@ Tests automatically seed the database with test data via `conftest.py`. The seed
 
 ## Troubleshooting
 
+### Understanding Why a Domain is Blocked/Allowed
+
+**Two separate filtering mechanisms:**
+
+1. **Global Whitelist** - `twitter.com` blocked because NOT in `allowed_hosts`; `google.com` allowed because it IS
+2. **Location-based** - Only applies when physically at a blocked location
+
+**Check current whitelist:**
+```bash
+kubectl exec -n hocuspocus postgres-0 -- psql -U mitmproxy -d mitmproxy \
+  -c "SELECT domain FROM allowed_hosts WHERE enabled = true LIMIT 20;"
+```
+
+### SimpleMDM Location Polling
+
+Location is now tracked via SimpleMDM polling (not JavaScript injection):
+```
+SimpleMDM → location-poller sidecar → device_locations table → proxy reads on each request
+```
+
+Check location-poller logs:
+```bash
+kubectl logs -n hocuspocus deployment/mitmproxy -c location-poller --tail=10
+```
+
 ### Error: "xcodebuild failed with code 65"
 
-**Cause:** WebDriverAgent is not properly signed or installed on the device.
+**Possible causes:**
 
-**Solution:**
-1. Open WebDriverAgent.xcodeproj in Xcode
-2. Select **WebDriverAgentRunner** target
-3. Go to Signing & Capabilities
-4. Select your Team and set Bundle Identifier
-5. Select your iPhone as target device
-6. Press Cmd+U to build and install
-7. Set `usePrebuiltWDA: True` in test config (already configured)
+1. **Developer certificate not trusted** (most common)
+   - iPhone: Settings → General → VPN & Device Management → Trust developer cert
+
+2. **"The identity used to sign the executable is no longer valid"**
+   - Certificate mismatch - rebuild WDA in Xcode (Cmd+Shift+K to clean, then Cmd+U)
+
+3. **"The file couldn't be opened because it doesn't exist"**
+   - Wrong scheme selected (IntegrationApp instead of WebDriverAgentRunner)
+   - In Xcode: Select **WebDriverAgentRunner** scheme, then Cmd+U
+
+4. **Provisioning issues**
+   - In Xcode: Signing & Capabilities → Select Team → Let Xcode manage
+
+**Full rebuild:**
+```bash
+open ~/.appium/node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent/WebDriverAgent.xcodeproj
+# Select WebDriverAgentRunner scheme, your Team, iPhone as destination
+# Press Cmd+U
+```
 
 ### Error: "Maximum App ID limit reached"
 
@@ -157,20 +204,12 @@ Tests automatically seed the database with test data via `conftest.py`. The seed
 
 ### Error: "VPN server not responding" / Timeout
 
-**Cause:** The AWS EC2 instance running the VPN server is stopped or unreachable.
+**Cause:** GKE VPN/mitmproxy isn’t running or the device isn’t actually connected to VPN.
 
 **Solution:**
-1. Start the EC2 instance:
-   ```bash
-   cd terraform/vpn
-   terraform apply
-   ```
-2. Verify the server is running:
-   ```bash
-   terraform output vpn_server_public_ip
-   # Try to reach it
-   curl -s --connect-timeout 5 http://$(terraform output -raw vpn_server_public_ip):22 || echo "Server reachable"
-   ```
+1. Start cluster: `make startgcvpn`
+2. Verify pods: `make pods`
+3. Verify iPhone VPN is connected (Always-On profile active)
 
 ### Error: "Port #8100 is occupied"
 
@@ -191,7 +230,7 @@ appium
 **Solution:**
 1. On iPhone: Settings → General → VPN & Device Management → Trust your developer certificate
 2. In Xcode: Clean build folder (Cmd+Shift+K) and rebuild WDA (Cmd+U)
-3. Ensure `usePrebuiltWDA: True` is set in test config
+3. Ensure iPhone is unlocked during WDA launch
 
 ### Tests pass on simulator but fail on real device
 
@@ -209,7 +248,7 @@ appium
 **Solution:**
 1. Check iPhone Settings → VPN → Ensure VPN is connected
 2. Clear Safari cache: Settings → Safari → Clear History and Website Data
-3. Check proxy logs: `make logs`
+3. Check proxy logs: `make logs` (or `kubectl logs -n hocuspocus deployment/mitmproxy --tail=200`)
 
 ## Common Issues We Encountered
 

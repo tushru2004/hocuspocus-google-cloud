@@ -2,11 +2,15 @@
 
 This directory contains configuration and scripts for setting up the Hocuspocus VPN on macOS.
 
+## Related (iPhone E2E / Appium)
+
+If you’re setting up **iPhone E2E tests** (WebDriverAgent + Appium + VPN profile + trust steps), see `tests/e2e/README.md` in the repo root.
+
 ## Overview
 
 The macOS setup consists of two components:
 
-1. **VPN Profile** - IKEv2 VPN with certificate authentication and VPN On-Demand
+1. **VPN Profile** - IKEv2 VPN (EAP for User-Approved MDM, cert auth for supervised devices)
 2. **pf Kill Switch** (optional) - Firewall rules that block all traffic except VPN
 
 ## Quick Start
@@ -28,9 +32,11 @@ make macos-pf-install
 ### Features
 
 - **IKEv2 Protocol** - Same as iOS setup
-- **Certificate Authentication** - No passwords needed
+- **Authentication Options**:
+  - **EAP (User-Approved MDM)** - username/password, no client cert payloads
+  - **Certificate (Supervised / manual)** - PKCS12 client identity
 - **VPN On-Demand** - Auto-connects when network is available
-- **Mitmproxy CA** - Included for HTTPS filtering
+- **Mitmproxy CA** - Install via separate device-scope profile for macOS
 
 ### Installation Methods
 
@@ -52,16 +58,49 @@ make macos-pf-install
    - Find "mitmproxy" in System keychain
    - Double-click > Trust > SSL: **Always Trust**
 
+6. Install Location Sender Daemon (for Block Page handling):
+   The MacBook uses a custom Python script to push location data to the VPN (since MDM location polling is unreliable on macOS).
+   
+   a. Install Python dependencies:
+      ```bash
+      /usr/bin/python3 -m venv ~/hocuspocus-location-daemon/venv
+      ~/hocuspocus-location-daemon/venv/bin/pip install pyobjc-framework-CoreLocation requests
+      ```
+   
+   b. Copy script:
+      Copy `macos/location-daemon/location_sender.py` to `~/hocuspocus-location-daemon/location_sender.py`
+   
+   c. Install LaunchAgent (runs on login):
+      Copy `macos/location-daemon/com.hocuspocus.location-sender-user.plist` to `~/Library/LaunchAgents/com.hocuspocus.location-sender.plist`
+   
+   d. Load the Agent:
+      ```bash
+      launchctl load ~/Library/LaunchAgents/com.hocuspocus.location-sender.plist
+      ```
+
+   e. Grant Permissions:
+      - A popup will appear asking for Location access for Python. Click "Allow".
+      - Or go to System Settings > Privacy & Security > Location Services > Enable for Python/Terminal.
+
 #### Method 2: MDM (SimpleMDM)
 
 1. Enroll Mac in SimpleMDM (requires supervision for enforcement)
 
-2. Push profile:
+2. Push **EAP device-scope** profile:
    ```bash
-   make macos-vpn-profile-mdm
+   make macos-vpn-eap-profile-mdm
    ```
 
-3. Profile installs automatically on enrolled Mac
+3. Install **mitmproxy CA** at device scope:
+   ```bash
+   ./macos/scripts/push-macos-mitmproxy-ca-profile-mdm.sh
+   ```
+
+4. Profile installs automatically on enrolled Mac
+
+5. **CRITICAL**: Install Location Sender Daemon
+   Even with MDM, the MacBook needs the location sender script to ensure the blocking page doesn't show up. MDM location polling is often too slow/stale for the proxy's strict checks.
+   Follow step 6 from the "Manual Installation" section above.
 
 ## pf Kill Switch (Optional)
 
