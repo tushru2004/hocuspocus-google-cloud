@@ -21,7 +21,7 @@ commonLabels:
 images:
   - name: REGISTRY/vpn
     newName: europe-west1-docker.pkg.dev/hocuspocus-vpn/hocuspocus-vpn/vpn
-    newTag: d1de7ef
+    newTag: 6b1879e
   - name: REGISTRY/mitmproxy
     newName: europe-west1-docker.pkg.dev/hocuspocus-vpn/hocuspocus-vpn/mitmproxy
-    newTag: d1de7ef
+    newTag: 6b1879e
